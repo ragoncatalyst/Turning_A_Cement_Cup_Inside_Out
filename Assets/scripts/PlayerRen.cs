@@ -6,6 +6,16 @@ public class PlayerRen : MonoBehaviour
 {
     private GameObject renderSquare;
     private GameObject renderQuad; // runtime mesh quad used for shadow casting
+    private SpriteRenderer spriteRenderer;
+    private Animator animator;
+    private Rigidbody playerRigidbody;
+    private bool lastFlip = false;
+    [Tooltip("Threshold of horizontal velocity to trigger flip (world X)" )]
+    public float flipThreshold = 0.05f;
+    [Tooltip("If true, flip direction is inverted (useful if sprite art faces left by default).")]
+    public bool invertFlip = true;
+    [Tooltip("Default flip state when the special animation is not playing")]
+    public bool defaultFlip = false;
     public enum BillboardMode { YOnly, FaceCamera }
     [Tooltip("YOnly: only rotate around Y to face camera (upright). FaceCamera: fully rotate to face camera on all axes")]
     public BillboardMode billboardMode = BillboardMode.YOnly;
@@ -28,15 +38,23 @@ public class PlayerRen : MonoBehaviour
         }
 
         renderSquare = rs.gameObject;
-        var sr = renderSquare.GetComponent<SpriteRenderer>();
-        if (sr == null)
+        spriteRenderer = renderSquare.GetComponent<SpriteRenderer>();
+        if (spriteRenderer == null)
         {
             Debug.LogError("PlayerRen: RenderSquare 上需要有 SpriteRenderer。请添加后重试。");
             return;
         }
 
         // 确保使用 2D SpriteRenderer 渲染（严格遵守 2D 渲染要求）
-        sr.enabled = true;
+        spriteRenderer.enabled = true;
+
+        // initialize flip state
+        spriteRenderer.flipX = defaultFlip;
+        lastFlip = defaultFlip;
+
+        // cache animator and player's rigidbody if present
+        animator = player.GetComponentInChildren<Animator>();
+        playerRigidbody = player.GetComponent<Rigidbody>();
     }
 
     void Update()
@@ -64,6 +82,67 @@ public class PlayerRen : MonoBehaviour
         else
         {
             t.rotation = worldRot;
+        }
+
+        // --- Animation flip logic ---
+        if (spriteRenderer != null)
+        {
+            bool handled = false;
+            if (animator != null)
+            {
+                var clips = animator.GetCurrentAnimatorClipInfo(0);
+                if (clips != null && clips.Length > 0 && clips[0].clip != null)
+                {
+                    string clipName = clips[0].clip.name;
+                    if (clipName == "PlayerIdle_BottomRight")
+                    {
+
+                        // Determine camera-relative horizontal movement
+                        float camDot = 0f;
+                        Vector3 camRight = cam.transform.right;
+                        camRight.y = 0f; camRight.Normalize();
+                        if (playerRigidbody != null)
+                        {
+                            Vector3 horVel = playerRigidbody.velocity;
+                            horVel.y = 0f;
+                            camDot = Vector3.Dot(horVel, camRight);
+                        }
+                        else
+                        {
+                            float inH = Input.GetAxisRaw("Horizontal");
+                            float inV = Input.GetAxisRaw("Vertical");
+                            Vector3 camForward = cam.transform.forward;
+                            camForward.y = 0f; camForward.Normalize();
+                            Vector3 inputVec = camRight * inH + camForward * inV;
+                            camDot = Vector3.Dot(inputVec, camRight);
+                        }
+
+                        bool flip = spriteRenderer.flipX;
+                        // If invertFlip==true then moving to camera-right should set flip=true; else flip=false
+                        bool flipWhenMovingRight = invertFlip;
+                        if (camDot > flipThreshold) flip = flipWhenMovingRight;
+                        else if (camDot < -flipThreshold) flip = !flipWhenMovingRight;
+
+                        if (flip != lastFlip)
+                        {
+                            spriteRenderer.flipX = flip;
+                            lastFlip = flip;
+                        }
+
+                        handled = true;
+                    }
+                }
+            }
+
+            // when not handled by the special animation, ensure default flip is enforced
+            if (!handled)
+            {
+                if (spriteRenderer.flipX != defaultFlip)
+                {
+                    spriteRenderer.flipX = defaultFlip;
+                    lastFlip = defaultFlip;
+                }
+            }
         }
     }
 }

@@ -57,22 +57,58 @@ public class PlayerMov : MonoBehaviour
         isCrouching = Input.GetKey(KeyCode.LeftShift);
         isRunning = Input.GetKey(KeyCode.Q);
 
-        // Camera-relative movement
+        // Camera-relative basis
         Vector3 cameraForward = Camera.main.transform.forward;
         Vector3 cameraRight = Camera.main.transform.right;
         cameraForward.y = 0f; cameraRight.y = 0f;
         cameraForward.Normalize(); cameraRight.Normalize();
 
-        float mvX = Input.GetAxis("Horizontal");
-        float mvZ = Input.GetAxis("Vertical");
+        // Read raw WASD keys so we can implement the strict axis-aligned diagonal rules
+        bool keyW = Input.GetKey(KeyCode.W);
+        bool keyA = Input.GetKey(KeyCode.A);
+        bool keyS = Input.GetKey(KeyCode.S);
+        bool keyD = Input.GetKey(KeyCode.D);
         float speedMultiplier = isCrouching ? 0.6f : (isRunning ? 1.5f : 1f);
 
-        Vector3 desired = cameraRight * mvX + cameraForward * mvZ;
-        if (desired.sqrMagnitude > 1f) desired.Normalize();
-        desired *= speed * speedMultiplier;
-        lastDesiredHorizontal = desired;
+        // Priority: when exactly the specified adjacent two-key combos are held, move along world axes
+        // WA -> X- ; SD -> X+ ; WD -> Z+ ; AS -> Z-
+        if (keyW && keyA && !keyS && !keyD)
+        {
+            float v = speed * speedMultiplier;
+            lastDesiredHorizontal = new Vector3(-v, 0f, 0f);
+            MovXNeg();
+        }
+        else if (keyS && keyD && !keyW && !keyA)
+        {
+            float v = speed * speedMultiplier;
+            lastDesiredHorizontal = new Vector3(v, 0f, 0f);
+            MovXPos();
+        }
+        else if (keyW && keyD && !keyA && !keyS)
+        {
+            float v = speed * speedMultiplier;
+            lastDesiredHorizontal = new Vector3(0f, 0f, v);
+            MovZPos();
+        }
+        else if (keyA && keyS && !keyW && !keyD)
+        {
+            float v = speed * speedMultiplier;
+            lastDesiredHorizontal = new Vector3(0f, 0f, -v);
+            MovZNeg();
+        }
+        else
+        {
+            // Default: camera-relative movement using input axes (preserves original behaviour)
+            float mvX = Input.GetAxis("Horizontal");
+            float mvZ = Input.GetAxis("Vertical");
 
-        rb.velocity = new Vector3(desired.x, rb.velocity.y, desired.z);
+            Vector3 desired = cameraRight * mvX + cameraForward * mvZ;
+            if (desired.sqrMagnitude > 1f) desired.Normalize();
+            desired *= speed * speedMultiplier;
+            lastDesiredHorizontal = desired;
+
+            rb.velocity = new Vector3(desired.x, rb.velocity.y, desired.z);
+        }
 
         // -------- Jump input handling (strict waitlist rules) --------
         // KeyDown: immediate jump if grounded; otherwise add a short buffered request (0.15s) if none exists
@@ -117,7 +153,7 @@ public class PlayerMov : MonoBehaviour
         }
 
         // Remove expired short requests
-        waitlist.RemoveAll(r => !r.isLongPress && r.expireAt <= Time.time);
+        CleanExpiredShortRequests();
 
         // Frame-based landing guard: if we just transitioned false->true, consume waitlist
         bool groundedNow = canJump;
@@ -153,11 +189,18 @@ public class PlayerMov : MonoBehaviour
         smoothCoroutine = StartCoroutine(SmoothHorizontalTo(lastDesiredHorizontal, 0.18f));
     }
 
+    private void CleanExpiredShortRequests()
+    {
+        if (waitlist.Count == 0) return;
+        waitlist.RemoveAll(r => !r.isLongPress && r.expireAt <= Time.time);
+    }
+
     // Axis-aligned helper methods required by the project
-    void MovXNeg() { rb.velocity = new Vector3(-speed, rb.velocity.y, 0f); }
-    void MovXPos() { rb.velocity = new Vector3(speed, rb.velocity.y, 0f); }
-    void MovZPos() { rb.velocity = new Vector3(0f, rb.velocity.y, speed); }
-    void MovZNeg() { rb.velocity = new Vector3(0f, rb.velocity.y, -speed); }
+    // These respect run / crouch multipliers so behaviour matches single-key movement
+    void MovXNeg() { float v = speed * (isCrouching ? 0.6f : (isRunning ? 1.5f : 1f)); rb.velocity = new Vector3(-v, rb.velocity.y, 0f); }
+    void MovXPos() { float v = speed * (isCrouching ? 0.6f : (isRunning ? 1.5f : 1f)); rb.velocity = new Vector3(v, rb.velocity.y, 0f); }
+    void MovZPos() { float v = speed * (isCrouching ? 0.6f : (isRunning ? 1.5f : 1f)); rb.velocity = new Vector3(0f, rb.velocity.y, v); }
+    void MovZNeg() { float v = speed * (isCrouching ? 0.6f : (isRunning ? 1.5f : 1f)); rb.velocity = new Vector3(0f, rb.velocity.y, -v); }
 
     private void OnTriggerEnter(Collider other)
     {
@@ -181,30 +224,23 @@ public class PlayerMov : MonoBehaviour
     private void TryConsumeWaitlistOnLanding()
     {
         if (consumedOnThisLanding) return;
-        // Remove expired short requests first
-        waitlist.RemoveAll(r => !r.isLongPress && r.expireAt <= Time.time);
+        CleanExpiredShortRequests();
         if (waitlist.Count == 0) return;
 
         // Process queue head: short -> consume and remove; long -> trigger but keep until release
         var req = waitlist[0];
         if (!req.isLongPress)
         {
-            // still valid?
             if (req.expireAt > Time.time)
             {
                 DoJump();
                 waitlist.RemoveAt(0);
                 consumedOnThisLanding = true;
             }
-            else
-            {
-                // expired, remove and return
-                waitlist.RemoveAt(0);
-            }
+            else waitlist.RemoveAt(0);
         }
         else
         {
-            // long-press: trigger a jump but keep the request in queue until release
             DoJump();
             consumedOnThisLanding = true;
         }
