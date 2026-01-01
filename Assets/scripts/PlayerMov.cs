@@ -28,6 +28,10 @@ public class PlayerMov : MonoBehaviour
     private int groundContacts = 0;
     private bool canJump { get { return groundContacts > 0; } }
 
+    [Header("Ground Detection")]
+    [Tooltip("Tag used to identify ground objects for jump/landing detection.")]
+    public string groundTag = "Ground";
+
     // Jump waitlist
     private class JumpRequest { public bool isLongPress; public float expireAt; }
     private List<JumpRequest> waitlist = new List<JumpRequest>();
@@ -38,6 +42,10 @@ public class PlayerMov : MonoBehaviour
     private Vector3 lastDesiredHorizontal = Vector3.zero;
     private Coroutine smoothCoroutine = null;
     private float lastJumpTime = -1f;
+    // Physics-tick desired velocity applied in FixedUpdate to avoid Update/physics mismatch
+    private Vector3 fixedDesiredHorizontal = Vector3.zero;
+    private bool jumpRequested = false;
+    private float pendingJumpForce = 0f;
     private bool wasGroundedPrev = false;
     // Prevent multiple consumptions on a single landing (OnTriggerEnter + frame-guard race)
     private bool consumedOnThisLanding = false;
@@ -49,6 +57,11 @@ public class PlayerMov : MonoBehaviour
     void Start()
     {
         rb = GetComponent<Rigidbody>();
+        if (rb != null)
+        {
+            rb.collisionDetectionMode = CollisionDetectionMode.ContinuousDynamic;
+            rb.interpolation = RigidbodyInterpolation.Interpolate;
+        }
     }
 
     void Update()
@@ -107,7 +120,8 @@ public class PlayerMov : MonoBehaviour
             desired *= speed * speedMultiplier;
             lastDesiredHorizontal = desired;
 
-            rb.velocity = new Vector3(desired.x, rb.velocity.y, desired.z);
+            // store desired horizontal velocity for FixedUpdate application
+            fixedDesiredHorizontal = desired;
         }
 
         // -------- Jump input handling (strict waitlist rules) --------
@@ -181,12 +195,30 @@ public class PlayerMov : MonoBehaviour
     {
         // guard: avoid applying a second impulse too quickly after a previous jump
         if (lastJumpTime > 0f && Time.time - lastJumpTime < minJumpSpacing) return;
-        // Normalize vertical state so every jump starts from the same baseline
-        rb.velocity = new Vector3(rb.velocity.x, 0f, rb.velocity.z);
-        rb.AddForce(Vector3.up * jumpForce, ForceMode.Impulse);
+        // Request a jump to be executed in FixedUpdate (physics tick)
+        pendingJumpForce = jumpForce;
+        jumpRequested = true;
         lastJumpTime = Time.time;
         if (smoothCoroutine != null) StopCoroutine(smoothCoroutine);
         smoothCoroutine = StartCoroutine(SmoothHorizontalTo(lastDesiredHorizontal, 0.18f));
+    }
+
+    private void FixedUpdate()
+    {
+        if (rb == null) return;
+
+        // Apply horizontal desired velocity on physics step
+        rb.velocity = new Vector3(fixedDesiredHorizontal.x, rb.velocity.y, fixedDesiredHorizontal.z);
+
+        // Execute pending jump impulses on physics step
+        if (jumpRequested)
+        {
+            // normalize vertical velocity before applying impulse
+            rb.velocity = new Vector3(rb.velocity.x, 0f, rb.velocity.z);
+            rb.AddForce(Vector3.up * pendingJumpForce, ForceMode.Impulse);
+            jumpRequested = false;
+            pendingJumpForce = 0f;
+        }
     }
 
     private void CleanExpiredShortRequests()
@@ -197,13 +229,15 @@ public class PlayerMov : MonoBehaviour
 
     // Axis-aligned helper methods required by the project
     // These respect run / crouch multipliers so behaviour matches single-key movement
-    void MovXNeg() { float v = speed * (isCrouching ? 0.6f : (isRunning ? 1.5f : 1f)); rb.velocity = new Vector3(-v, rb.velocity.y, 0f); }
-    void MovXPos() { float v = speed * (isCrouching ? 0.6f : (isRunning ? 1.5f : 1f)); rb.velocity = new Vector3(v, rb.velocity.y, 0f); }
-    void MovZPos() { float v = speed * (isCrouching ? 0.6f : (isRunning ? 1.5f : 1f)); rb.velocity = new Vector3(0f, rb.velocity.y, v); }
-    void MovZNeg() { float v = speed * (isCrouching ? 0.6f : (isRunning ? 1.5f : 1f)); rb.velocity = new Vector3(0f, rb.velocity.y, -v); }
+    // They now write into `fixedDesiredHorizontal` so movement is applied in FixedUpdate
+    void MovXNeg() { float v = speed * (isCrouching ? 0.6f : (isRunning ? 1.5f : 1f)); fixedDesiredHorizontal = new Vector3(-v, 0f, 0f); lastDesiredHorizontal = fixedDesiredHorizontal; }
+    void MovXPos() { float v = speed * (isCrouching ? 0.6f : (isRunning ? 1.5f : 1f)); fixedDesiredHorizontal = new Vector3(v, 0f, 0f); lastDesiredHorizontal = fixedDesiredHorizontal; }
+    void MovZPos() { float v = speed * (isCrouching ? 0.6f : (isRunning ? 1.5f : 1f)); fixedDesiredHorizontal = new Vector3(0f, 0f, v); lastDesiredHorizontal = fixedDesiredHorizontal; }
+    void MovZNeg() { float v = speed * (isCrouching ? 0.6f : (isRunning ? 1.5f : 1f)); fixedDesiredHorizontal = new Vector3(0f, 0f, -v); lastDesiredHorizontal = fixedDesiredHorizontal; }
 
     private void OnTriggerEnter(Collider other)
     {
+        if (!other.CompareTag(groundTag)) return;
         bool wasZero = groundContacts == 0;
         groundContacts++;
         if (wasZero)
@@ -216,6 +250,29 @@ public class PlayerMov : MonoBehaviour
 
     private void OnTriggerExit(Collider other)
     {
+        if (!other.CompareTag(groundTag)) return;
+        groundContacts = Mathf.Max(0, groundContacts - 1);
+        if (groundContacts == 0) consumedOnThisLanding = false;
+    }
+
+    private void OnCollisionEnter(Collision collision)
+    {
+        // treat non-trigger collisions with ground as landing
+        var other = collision.collider;
+        if (!other.CompareTag(groundTag)) return;
+        bool wasZero = groundContacts == 0;
+        groundContacts++;
+        if (wasZero)
+        {
+            consumedOnThisLanding = false;
+            TryConsumeWaitlistOnLanding();
+        }
+    }
+
+    private void OnCollisionExit(Collision collision)
+    {
+        var other = collision.collider;
+        if (!other.CompareTag(groundTag)) return;
         groundContacts = Mathf.Max(0, groundContacts - 1);
         if (groundContacts == 0) consumedOnThisLanding = false;
     }
@@ -249,17 +306,17 @@ public class PlayerMov : MonoBehaviour
     private IEnumerator SmoothHorizontalTo(Vector3 targetHorizontal, float duration)
     {
         float t = 0f;
-        Vector3 start = new Vector3(rb.velocity.x, 0f, rb.velocity.z);
+        Vector3 start = new Vector3(fixedDesiredHorizontal.x, 0f, fixedDesiredHorizontal.z);
         Vector3 end = new Vector3(targetHorizontal.x, 0f, targetHorizontal.z);
         while (t < duration)
         {
             t += Time.deltaTime;
             float f = Mathf.SmoothStep(0f, 1f, t / duration);
             Vector3 cur = Vector3.Lerp(start, end, f);
-            rb.velocity = new Vector3(cur.x, rb.velocity.y, cur.z);
+            fixedDesiredHorizontal = cur;
             yield return null;
         }
-        rb.velocity = new Vector3(end.x, rb.velocity.y, end.z);
+        fixedDesiredHorizontal = end;
         smoothCoroutine = null;
     }
 }

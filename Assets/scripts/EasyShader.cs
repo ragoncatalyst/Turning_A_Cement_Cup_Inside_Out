@@ -132,7 +132,15 @@ public class EasyShader : MonoBehaviour
         bool hitGround = Physics.Raycast(origin, Vector3.down, out hit, maxCastDistance, groundLayers, QueryTriggerInteraction.Ignore);
         if (hitGround)
         {
-            Vector3 groundPos = hit.point + hit.normal * groundOffset;
+            // Ensure we place the shadow slightly above the detected ground point.
+            // Use absolute(groundOffset) so designers don't accidentally set a negative offset.
+            Vector3 groundPos = hit.point + hit.normal * Mathf.Abs(groundOffset);
+            // As an extra safety, ensure Y is at least slightly above hit.point.y to avoid being buried.
+            float minAbove = 0.005f;
+            if (groundPos.y < hit.point.y + minAbove)
+            {
+                groundPos.y = hit.point.y + minAbove;
+            }
             lastGroundPos = groundPos;
             Quaternion groundRot = Quaternion.FromToRotation(Vector3.up, hit.normal);
             lastGroundRot = groundRot;

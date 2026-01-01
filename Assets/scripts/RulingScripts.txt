@@ -1,0 +1,96 @@
+Ruling Scripts 文档
+
+说明：
+- 在此文件中记录本项目中重要脚本的功能、变量与方法说明。
+- 当代码文件发生更改，必须在此文件中同步更新对应说明（保持一致）。
+
+已包含脚本：
+
+1) PlayerInteraction.cs
+- 作用：挂载在玩家身上，负责检测玩家附近的可交互物体，并在玩家按下 `F` 键时触发交互。
+- 主要序列化字段：
+  - `interactRange` (float)：交互检测范围（环形半径）。
+  - `interactableLayer` (LayerMask)：用于筛选哪些层被视为可交互对象（通过 LayerMask 选择场景中被标记为交互物的层）。
+  - `interactionOrigin` (Transform)：可选，用于指定检测中心（若为空则使用玩家自身的位置）。
+- 主要私有字段：
+  - `currentTarget` (ObjectInteractable)：最近并且可交互的目标引用。
+- 主要方法：
+  - `Update()`：每帧调用，先更新当前检测到的目标，然后监听 `F` 键按下事件，若有目标则调用其 `Interact()`。
+  - `UpdateCurrentTarget()`：使用 `Physics.OverlapSphere` 在 `interactionOrigin` 周围按 `interactRange` 和 `interactableLayer` 过滤碰撞体，选择最近的 `ObjectInteractable` 作为 `currentTarget`。
+- 使用说明：
+  1. 将此脚本挂载到玩家 GameObject（例如 Player）。
+  2. 设置 `interactRange`（例如 2f），并设置 `interactableLayer` 为包含可交互对象的层。
+  3. 可选将 `interactionOrigin` 指向玩家头部或摄像机以改变检测中心。
+
+更新：多目标交互触发
+- `PlayerInteraction` 的按键交互逻辑已更新：当玩家按下 `F` 时，脚本会使用 `Physics.OverlapSphere` 在 `interactionOrigin` 周围按 `interactRange` 和 `interactableLayer` 收集所有碰撞体，然后遍历这些碰撞体，找到所有挂有 `ObjectInteractable` 且 `IsInteractable==true` 的对象并逐一调用它们的 `Interact(GameObject interactor)`。
+- 为避免重复触发（同一对象有多个 Collider），实现中使用了去重集合（HashSet）。
+
+2) ObjectInteractable.cs
+- 作用：挂载在场景中可交互的物体上，声明物体是否可交互，并实现简单的交互反应（显示文本框）。
+- 主要序列化字段：
+  - `isInteractable` (bool)：是否允许被交互（可在 Inspector 里勾选开关）。
+  - `textBox` (TMP_Text)：当玩家交互时用于显示的文本框（可在 Inspector 里引用场景中的 TextMeshPro UI 元素）。
+  - `displayText` (string, TextArea)：要显示的文字内容（可在 Inspector 中手动填写）。
+- 主要属性/方法：
+  - `IsInteractable` (bool, 只读)：返回当前 `isInteractable` 状态，供外部（如 `PlayerInteraction`）判定。
+  - `Interact(GameObject interactor)`：对外的交互入口方法。当 `isInteractable` 为 true 且 `textBox` 已设置时，将 `displayText` 写入 `textBox.text` 并激活 `textBox` 的 GameObject；否则输出调试信息。
+- 使用说明：
+  1. 将此脚本挂载到场景中希望被玩家交互的物体（例如 NPC、箱子、开关等）。
+  2. 在 Inspector 中设置 `isInteractable`、将一个 TMP UI 元素拖入 `textBox`，并填写 `displayText`。
+  3. 保持物体的 Layer 与 `PlayerInteraction` 中的 `interactableLayer` 对应，或直接把物体放在对应层。
+
+扩展建议（未来同步到此文档）：
+- 可增加事件/接口（如 UnityEvent 或 C# 事件）以支持多种交互反应（除了显示文本框，还可以播放动画、修改状态等）。
+- 在 `ObjectInteractable` 中增加冷却、一次性交互、权限判定等逻辑。
+
+重要：在以后的任何脚本变更（变量重命名、方法签名变更、交互逻辑调整）时，必须同步编辑本 `RulingScripts.txt`，保持文档与代码一致。
+
+3) ObjectRen.cs
+- 作用：为场景中需要始终面向相机的物体提供“广告牌/Billboard”行为。此脚本可挂在物体上，或在物体有专门的渲染子物体时将其 `renderRoot` 指向该子物体，以仅修改渲染节点的局部旋转而不改变父物体的 Transform。
+- 主要序列化字段：
+  - `renderRoot` (Transform)：要旋转的子 Transform（可为空，若为空则使用挂载脚本的 Transform）。
+  - `billboardMode` (enum：`YOnly`、`FaceCamera`)：`YOnly` 只在 Y 轴上旋转以面向摄像机（保持物体直立）；`FaceCamera` 在所有轴上朝向摄像机。
+- 主要方法/行为：
+  - `LateUpdate()`：每帧结束时计算从 `renderRoot` 指向 `Camera.main` 的方向，根据 `billboardMode` 生成世界朝向并将其转换为相对于父物体的局部旋转写入 `localRotation`（若无父物体则直接设置 `rotation`）。
+  - `OnDrawGizmosSelected()`：在编辑器中可视化 `renderRoot` 的位置。
+- 使用说明：
+  1. 将此脚本挂载在希望始终面向摄像机的物体上，或将 `renderRoot` 设置为想要旋转的子节点（例如只旋转显示面板而不移动逻辑父物体）。
+  2. 选择 `billboardMode` 为 `YOnly`（用于竖直广告牌）或 `FaceCamera`（完全朝向摄像机）。
+  3. 在之后若修改了脚本中的字段名或行为，请务必同步更新此文档。
+
+注意：防止同时下落物体穿透地面的提示
+- 在 `PlayerMov` 的 `Start()` 中：脚本会自动将玩家的 `Rigidbody.collisionDetectionMode` 设为 `ContinuousDynamic`，并将 `Rigidbody.interpolation` 设为 `Interpolate`，以减少高速或同时下落时的穿透（tunneling）问题。
+- 在 `ObjectInteractable` 的 `Start()` 中：若物体含有 `Rigidbody`，会自动将 `collisionDetectionMode` 设为 `Continuous` 并启用插值（`Interpolate`），以提高与地面及其他刚体的碰撞稳定性。
+
+如果仍然出现穿透问题，请检查以下项：
+- 场景中的地面 Collider 是否为非触发（isTrigger=false）并且为静态（没有 Rigidbody 或 Rigidbody 是 kinematic）。
+- 确认两个刚体所在的层在 `Project Settings > Physics` 的 Layer Collision Matrix 中允许与地面层发生碰撞。
+- 对于极高速度的物体，考虑将 `collisionDetectionMode` 设为 `ContinuousDynamic` 或在物体上使用更细粒度的物理步长（不是首选方案）。
+
+4) ObjectCollider.cs
+- 作用：当希望某个物体的碰撞箱“拒绝其他物体进入”时使用。该脚本会在物理步骤期间检测与其他 Collider 的重叠（即穿透），并尝试将重叠的其他物体按最小分离向量平移出去，从而在多数情况下自动修复穿透问题。
+- 主要序列化字段：
+  - `rejectOthers` (bool)：启用/禁用拒绝行为。
+  - `extraSeparation` (float)：在计算的分离距离基础上额外多给多少米，避免频繁重新穿透（默认 0.01）。
+  - `maxResolve` (float)：单步允许的最大位移，防止一次性过大传送。
+  - `debugDraw` (bool)：在 Scene 视图中用红线可视化每次修正位移。
+- 主要行为：
+  - 在 `OnCollisionStay` 与 `OnTriggerStay` 中调用 `Physics.ComputePenetration` 检测是否穿透，并计算最小分离方向与距离。
+  - 若重叠，则优先使用 `other.attachedRigidbody.MovePosition(...)` 将动态刚体移出穿透；若目标刚体为 `isKinematic` 或无刚体，则直接修改其 `transform.position`。
+  - 在设计上尽量避免移动本对象（`self`）而是推进对方，从而实现“拒绝进入”的直观效果。
+- 注意事项：
+  - 该脚本试图在常见场景下自动修复穿透，但并不是替代正确的碰撞设置（例如确保地面为静态 Collider、合理的质量/速度、合适的 collisionDetectionMode）。
+  - 对于复杂的激烈物理交互（高速小物体、管线化物理逻辑），可能需要进一步调整 `collisionDetectionMode` 或使用物理材质（PhysicsMaterial）和层碰撞矩阵。
+
+更新（已精简）：
+- `ObjectCollider` 已被简化为仅保留在 `Awake()` 中为挂载物体确保存在且配置为 `isKinematic=true` 的 `Rigidbody`。这能把物体作为不可移动的碰撞体由物理引擎稳定处理，从而避免手动位移其它刚体带来的抛出或传送行为。
+- 可配置字段：`enforceKinematicSelf`（开/关）、`collisionModeToSet`（默认 `Continuous`）、`interpolationModeToSet`（默认 `Interpolate`）。
+ 
+行为更新说明：
+- 若挂载物体的 `tag` 等于 `Ground`，脚本会在 `Awake()` 中立即把自身设为 `isKinematic=true`（不可动），以作为场景中的静态地面或障碍。
+- 若物体 `tag` 不等于 `Ground`，脚本会在 `Awake()` 中保持刚体为动态（允许自由落体），并在 `OnTriggerEnter` 或 `OnCollisionEnter` 检测到与 `tag==Ground` 的接触时才将其切换为 kinematic。这样可以保证物体在落地前仍按物理自由落体运动，落地后被稳定地当作不可移动障碍处理。
+
+更新（阻止穿透并避免把玩家“扔出”）：
+- `ObjectCollider` 现在支持 `enforceKinematicSelf`，默认会确保挂载物体具有一个 `Rigidbody` 且 `isKinematic=true`，使其作为不可移动障碍被物理引擎处理。
+- 为避免一次性大幅传送导致的抛出行为，默认 `maxResolve` 减小到 `0.1m`，并在修正时先清除入侵刚体沿分离方向的速度分量，然后用 `Rigidbody.MovePosition` 以小步长将入侵刚体推出重叠区域。这能保证即使玩家速度很大，也不会被瞬间弹出或穿透障碍，而是被物理稳定地阻挡。
