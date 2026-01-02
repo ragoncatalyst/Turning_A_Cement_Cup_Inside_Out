@@ -12,8 +12,8 @@ public class InteractionTip : MonoBehaviour
     [SerializeField] private GameObject rangeTipSprite;
 
     [Header("Detection (optional, will try to read from PlayerInteraction if present)")]
-    [Tooltip("Interaction range (meters) used for near detection. If a PlayerInteraction component exists on the same GameObject, this value will be read from it automatically.")]
-    [SerializeField] private float interactRange = 2f;
+    [Tooltip("Interaction range (meters) used for near detection. If left <= 0 a sensible default will be used. If a PlayerInteraction component exists on the same GameObject, this value will be read from it automatically.")]
+    [SerializeField] private float interactRange = 0f;
 
     [Tooltip("Layer mask used for overlap checks. If left empty (Nothing) all layers will be considered when scanning scene objects.")]
     [SerializeField] private LayerMask interactableLayer = ~0;
@@ -43,7 +43,21 @@ public class InteractionTip : MonoBehaviour
             fi_range = t.GetField("interactRange", BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Public);
             fi_layer = t.GetField("interactableLayer", BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Public);
             fi_origin = t.GetField("interactionOrigin", BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Public);
+
+            // If InteractionTip's inspector value is not set (<=0), try to read the player's value as a sensible default.
+            if (interactRange <= 0f && fi_range != null)
+            {
+                try
+                {
+                    object v = fi_range.GetValue(playerInteractionComp);
+                    if (v is float && (float)v > 0f) interactRange = (float)v;
+                }
+                catch { }
+            }
         }
+
+        // If still not set, apply local default
+        if (interactRange <= 0f) interactRange = 2f;
     }
 
     void Update()
@@ -53,10 +67,11 @@ public class InteractionTip : MonoBehaviour
         {
             try
             {
-                if (fi_range != null)
+                // Only copy the player's interactRange if this InteractionTip has not been configured in the Inspector (<=0)
+                if (fi_range != null && interactRange <= 0f)
                 {
                     object v = fi_range.GetValue(playerInteractionComp);
-                    if (v is float) interactRange = (float)v;
+                    if (v is float && (float)v > 0f) interactRange = (float)v;
                 }
                 if (fi_layer != null)
                 {

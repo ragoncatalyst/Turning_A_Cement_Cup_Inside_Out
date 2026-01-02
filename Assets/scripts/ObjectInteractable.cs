@@ -44,6 +44,9 @@ public class ObjectInteractable : MonoBehaviour
 
     public bool IsInteractable => isInteractable;
 
+    // expose textBox for callers that need to coordinate shared TMP usage
+    public TMP_Text TextBox => textBox;
+
     private void Start()
     {
         // Ensure dynamic objects use continuous collision detection and interpolation
